@@ -46,6 +46,14 @@ impl CompilationResult {
     pub fn save_to_disk(&self, path: &str) -> Result<(), BentoError> {
         todo!()
     }
+
+    pub fn to_bytes(&self) -> Result<Vec<u8>, BentoError> {
+        todo!()
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, BentoError> {
+        todo!()
+    }
 }
 
 //////////////////////////////////////////////////////////////////////////////
