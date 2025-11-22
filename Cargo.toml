@@ -5,6 +5,10 @@ edition = "2024"
 
 [dependencies]
 dashi = {git = "https://github.com/JordanHendl/dashi", features = ["dashi-serde"]}
+thiserror = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bincode = "1"
 
 [lib]
 
