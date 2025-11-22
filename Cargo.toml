@@ -1,0 +1,14 @@
+[package]
+name = "bento"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+dashi = {path = "/wksp/git/dashi", features = ["dashi-serde"]}
+
+[lib]
+
+
+[[bin]]
+name = "bentocc"
+path = "src/exec/bin.rs"
