@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-dashi = {path = "/wksp/git/dashi", features = ["dashi-serde"]}
+dashi = {git = "https://github.com/JordanHendl/dashi", features = ["dashi-serde"]}
 
 [lib]
 
