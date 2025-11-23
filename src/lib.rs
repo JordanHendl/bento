@@ -149,12 +149,8 @@ impl Compiler {
         path: &str,
         request: &Request,
     ) -> Result<CompilationResult, BentoError> {
-        let bytes = fs::read(path).map_err(|e| {
-            BentoError::Io(std::io::Error::new(
-                e.kind(),
-                format!("{path}: {e}"),
-            ))
-        })?;
+        let bytes = fs::read(path)
+            .map_err(|e| BentoError::Io(std::io::Error::new(e.kind(), format!("{path}: {e}"))))?;
         let mut result = self.compile(&bytes, request)?;
         result.file = Some(path.to_string());
 
