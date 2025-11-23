@@ -2,6 +2,10 @@ pub mod error;
 use std::{fs, path::Path};
 
 use serde::{Deserialize, Serialize};
+use shaderc::{
+    CompileOptions, Compiler as ShadercCompiler, EnvVersion, OptimizationLevel as ShadercOpt,
+    ShaderKind, SourceLanguage, TargetEnv,
+};
 
 pub use error::*;
 
@@ -83,11 +87,16 @@ impl CompilationResult {
 //////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////
 
-pub struct Compiler {}
+pub struct Compiler {
+    compiler: ShadercCompiler,
+}
 
 impl Compiler {
     pub fn new() -> Self {
-        todo!()
+        let compiler =
+            ShadercCompiler::new().expect("Unable to construct shaderc compiler instance");
+
+        Self { compiler }
     }
 
     pub fn compile(
@@ -95,7 +104,44 @@ impl Compiler {
         shader: &[u8],
         request: &Request,
     ) -> Result<CompilationResult, BentoError> {
-        todo!()
+        let source = std::str::from_utf8(shader)
+            .map_err(|_| BentoError::InvalidInput("Shader source is not valid UTF-8".into()))?;
+
+        let mut options = CompileOptions::new()
+            .ok_or_else(|| BentoError::ShaderCompilation("Failed to create options".into()))?;
+
+        options.set_source_language(source_language(request.lang)?);
+        options.set_target_env(TargetEnv::Vulkan, EnvVersion::Vulkan1_2 as u32);
+        options.set_optimization_level(shaderc_optimization(request.optimization));
+
+        if request.debug_symbols {
+            options.set_generate_debug_info();
+        }
+
+        let shader_kind = shader_stage(request.stage)?;
+
+        let artifact = self
+            .compiler
+            .compile_into_spirv(
+                source,
+                shader_kind,
+                request.name.as_deref().unwrap_or("shader"),
+                "main",
+                Some(&options),
+            )
+            .map_err(|e| BentoError::ShaderCompilation(e.to_string()))?;
+
+        let spirv = artifact.as_binary().to_vec();
+        let variables = reflect_bindings(artifact.as_binary_u8())?;
+
+        Ok(CompilationResult {
+            name: request.name.clone(),
+            file: None,
+            lang: request.lang,
+            stage: request.stage,
+            variables,
+            spirv,
+        })
     }
 
     pub fn compile_from_file(
@@ -103,8 +149,94 @@ impl Compiler {
         path: &str,
         request: &Request,
     ) -> Result<CompilationResult, BentoError> {
-        todo!()
+        let bytes = fs::read(path)?;
+        let mut result = self.compile(&bytes, request)?;
+        result.file = Some(path.to_string());
+
+        Ok(result)
     }
+}
+
+fn shader_stage(stage: dashi::ShaderType) -> Result<ShaderKind, BentoError> {
+    match stage {
+        dashi::ShaderType::Vertex => Ok(ShaderKind::Vertex),
+        dashi::ShaderType::Fragment => Ok(ShaderKind::Fragment),
+        dashi::ShaderType::Compute => Ok(ShaderKind::Compute),
+        dashi::ShaderType::All => Err(BentoError::InvalidInput(
+            "ShaderType::All is not supported for compilation".into(),
+        )),
+    }
+}
+
+fn source_language(lang: ShaderLang) -> Result<SourceLanguage, BentoError> {
+    match lang {
+        ShaderLang::Glsl => Ok(SourceLanguage::GLSL),
+        ShaderLang::Hlsl | ShaderLang::Slang => Ok(SourceLanguage::HLSL),
+        ShaderLang::Other => Err(BentoError::InvalidInput(
+            "Unsupported shader language".into(),
+        )),
+    }
+}
+
+fn shaderc_optimization(level: OptimizationLevel) -> ShadercOpt {
+    match level {
+        OptimizationLevel::None => ShadercOpt::Zero,
+        OptimizationLevel::FileSize => ShadercOpt::Size,
+        OptimizationLevel::Performance => ShadercOpt::Performance,
+    }
+}
+
+fn reflect_bindings(spirv_bytes: &[u8]) -> Result<Vec<ShaderVariable>, BentoError> {
+    use rspirv_reflect::{BindingCount, DescriptorType, Reflection};
+
+    let reflection = Reflection::new_from_spirv(spirv_bytes)
+        .map_err(|e| BentoError::ShaderCompilation(e.to_string()))?;
+
+    let mut variables = Vec::new();
+
+    let descriptor_sets = reflection
+        .get_descriptor_sets()
+        .map_err(|e| BentoError::ShaderCompilation(e.to_string()))?;
+
+    for bindings in descriptor_sets.values() {
+        for (binding, info) in bindings.iter() {
+            let var_type = match info.ty {
+                DescriptorType::UNIFORM_BUFFER => dashi::BindGroupVariableType::Uniform,
+                DescriptorType::UNIFORM_BUFFER_DYNAMIC => {
+                    dashi::BindGroupVariableType::DynamicUniform
+                }
+                DescriptorType::STORAGE_BUFFER => dashi::BindGroupVariableType::Storage,
+                DescriptorType::STORAGE_BUFFER_DYNAMIC => {
+                    dashi::BindGroupVariableType::DynamicStorage
+                }
+                DescriptorType::SAMPLED_IMAGE => dashi::BindGroupVariableType::SampledImage,
+                DescriptorType::STORAGE_IMAGE => dashi::BindGroupVariableType::StorageImage,
+                DescriptorType::COMBINED_IMAGE_SAMPLER => {
+                    dashi::BindGroupVariableType::SampledImage
+                }
+                _ => dashi::BindGroupVariableType::Uniform,
+            };
+
+            let count = match info.binding_count {
+                BindingCount::One => 1,
+                BindingCount::StaticSized(value) => value as u32,
+                BindingCount::Unbounded => 0,
+            };
+
+            variables.push(ShaderVariable {
+                name: info.name.clone(),
+                kind: dashi::BindGroupVariable {
+                    var_type,
+                    binding: *binding,
+                    count,
+                },
+            });
+        }
+    }
+
+    variables.sort_by_key(|v| v.kind.binding);
+
+    Ok(variables)
 }
 
 #[cfg(test)]
@@ -167,5 +299,76 @@ mod tests {
         fs::remove_file(&path).ok();
 
         Ok(())
+    }
+
+    fn sample_request() -> Request {
+        Request {
+            name: Some("sample".to_string()),
+            lang: ShaderLang::Glsl,
+            stage: dashi::ShaderType::Compute,
+            optimization: OptimizationLevel::None,
+            debug_symbols: false,
+        }
+    }
+
+    #[test]
+    fn compiles_shader_source() -> Result<(), BentoError> {
+        let compiler = Compiler::new();
+        let shader = include_str!("../tests/fixtures/simple_compute.glsl");
+        let request = sample_request();
+
+        let result = compiler.compile(shader.as_bytes(), &request)?;
+
+        assert_eq!(result.name, request.name);
+        assert_eq!(result.file, None);
+        assert_eq!(result.stage, dashi::ShaderType::Compute);
+        assert_eq!(result.lang, ShaderLang::Glsl);
+        assert!(!result.spirv.is_empty());
+        assert!(!result.variables.is_empty());
+        assert_eq!(result.variables[0].kind.binding, 0);
+        assert_eq!(
+            result.variables[0].kind.var_type,
+            dashi::BindGroupVariableType::Storage
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn compiles_shader_from_file() -> Result<(), BentoError> {
+        let compiler = Compiler::new();
+        let request = sample_request();
+        let path = "tests/fixtures/simple_compute.glsl";
+
+        let result = compiler.compile_from_file(path, &request)?;
+
+        assert_eq!(result.file.as_deref(), Some(path));
+        assert!(!result.spirv.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn returns_error_for_missing_file() {
+        let compiler = Compiler::new();
+        let request = sample_request();
+        let missing_path = "tests/fixtures/does_not_exist.glsl";
+
+        let err = compiler
+            .compile_from_file(missing_path, &request)
+            .unwrap_err();
+
+        assert!(matches!(err, BentoError::Io(_)));
+    }
+
+    #[test]
+    fn returns_error_for_invalid_shader() {
+        let compiler = Compiler::new();
+        let request = sample_request();
+        let shader = b"#version 450\nvoid main() {";
+
+        let err = compiler.compile(shader, &request).unwrap_err();
+
+        assert!(matches!(err, BentoError::ShaderCompilation(_)));
     }
 }
