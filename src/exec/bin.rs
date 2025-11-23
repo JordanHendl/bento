@@ -1,26 +1,145 @@
-use bento::*;
+use bento::{Compiler, OptimizationLevel, Request, ShaderLang};
+use clap::{ArgAction, Parser, ValueEnum};
+
+#[derive(Debug, Clone, ValueEnum)]
+enum LangArg {
+    Slang,
+    Glsl,
+    Hlsl,
+    Other,
+}
+
+impl From<LangArg> for ShaderLang {
+    fn from(value: LangArg) -> Self {
+        match value {
+            LangArg::Slang => ShaderLang::Slang,
+            LangArg::Glsl => ShaderLang::Glsl,
+            LangArg::Hlsl => ShaderLang::Hlsl,
+            LangArg::Other => ShaderLang::Other,
+        }
+    }
+}
+
+#[derive(Debug, Clone, ValueEnum)]
+enum StageArg {
+    Vertex,
+    Fragment,
+    Compute,
+}
+
+impl From<StageArg> for dashi::ShaderType {
+    fn from(value: StageArg) -> Self {
+        match value {
+            StageArg::Vertex => dashi::ShaderType::Vertex,
+            StageArg::Fragment => dashi::ShaderType::Fragment,
+            StageArg::Compute => dashi::ShaderType::Compute,
+        }
+    }
+}
+
+#[derive(Debug, Clone, ValueEnum)]
+enum OptArg {
+    None,
+    #[value(alias = "size")]
+    FileSize,
+    Performance,
+}
+
+impl From<OptArg> for OptimizationLevel {
+    fn from(value: OptArg) -> Self {
+        match value {
+            OptArg::None => OptimizationLevel::None,
+            OptArg::FileSize => OptimizationLevel::FileSize,
+            OptArg::Performance => OptimizationLevel::Performance,
+        }
+    }
+}
+
+#[derive(Debug, Parser)]
+#[command(author, version, about = "Compile shaders into Bento artifacts", long_about = None)]
+struct Args {
+    /// Path to the shader source file
+    shader: String,
+
+    /// Source language of the shader
+    #[arg(short, long, value_enum, default_value = "glsl")]
+    lang: LangArg,
+
+    /// Shader stage to compile
+    #[arg(short, long, value_enum)]
+    stage: StageArg,
+
+    /// Optimization level for the compiler
+    #[arg(
+        short = 'O',
+        long = "optimization",
+        value_enum,
+        default_value = "none",
+        alias = "opt"
+    )]
+    optimization: OptArg,
+
+    /// Include debug symbols in the compiled output
+    #[arg(long, action = ArgAction::SetTrue)]
+    debug_symbols: bool,
+
+    /// Output path for the compiled artifact
+    #[arg(short, long, value_name = "PATH")]
+    output: String,
+
+    /// Optional name for the shader entry
+    #[arg(short, long)]
+    name: Option<String>,
+
+    /// Print verbose compilation metadata
+    #[arg(short, long, action = ArgAction::SetTrue)]
+    verbose: bool,
+}
 
 fn main() {
-    let args = std::env::args();
-    let compiler = Compiler::new().expect("Unable to construct compiler");
-    
-    // Fill out request from args
-    let request = Request {
-        name: todo!(),
-        lang: todo!(),
-        stage: todo!(),
-        optimization: todo!(),
-        debug_symbols: todo!(),
-    };
-    let verbose = todo!(); // From args...
-    let path = todo!(); // From Args...
-
-    let res = compiler.compile_from_file(path, &request).expect("Unable to compile file!");
-
-    if verbose {
-        // print result information...
-        todo!()
+    if let Err(err) = run() {
+        eprintln!("Error: {err}");
+        std::process::exit(1);
     }
-    
-    res.save_to_disk(todo!());
+}
+
+fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let args = Args::parse();
+
+    let request = Request {
+        name: args.name.clone(),
+        lang: args.lang.into(),
+        stage: args.stage.into(),
+        optimization: args.optimization.into(),
+        debug_symbols: args.debug_symbols,
+    };
+
+    let compiler = Compiler::new()?;
+    let result = compiler.compile_from_file(&args.shader, &request)?;
+
+    if args.verbose {
+        print_metadata(&result);
+    }
+
+    result.save_to_disk(&args.output)?;
+
+    Ok(())
+}
+
+fn print_metadata(result: &bento::CompilationResult) {
+    println!(
+        "Entry: {}",
+        result.name.as_deref().unwrap_or("<unnamed shader>")
+    );
+    println!("Language: {:?}", result.lang);
+    println!("Stage: {:?}", result.stage);
+    println!("Variables:");
+    for var in &result.variables {
+        println!(
+            "  {} -> binding {} ({:?}), count {}",
+            var.name, var.kind.binding, var.kind.var_type, var.kind.count
+        );
+    }
+    let byte_size = result.spirv.len() * std::mem::size_of::<u32>();
+    println!("Output size: {} bytes", byte_size);
 }

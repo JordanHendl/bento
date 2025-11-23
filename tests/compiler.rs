@@ -33,7 +33,9 @@ fn returns_missing_file_error() {
     let request = sample_request();
     let missing_path = "tests/fixtures/not_real_shader.glsl";
 
-    let err = compiler.compile_from_file(missing_path, &request).unwrap_err();
+    let err = compiler
+        .compile_from_file(missing_path, &request)
+        .unwrap_err();
 
     match err {
         BentoError::Io(io_err) => {
