@@ -2,7 +2,7 @@ use bento::*;
 
 fn main() {
     let args = std::env::args();
-    let compiler = Compiler::new(); 
+    let compiler = Compiler::new().expect("Unable to construct compiler");
     
     // Fill out request from args
     let request = Request {

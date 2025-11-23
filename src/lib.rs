@@ -92,11 +92,11 @@ pub struct Compiler {
 }
 
 impl Compiler {
-    pub fn new() -> Self {
-        let compiler =
-            ShadercCompiler::new().expect("Unable to construct shaderc compiler instance");
+    pub fn new() -> Result<Self, BentoError> {
+        let compiler = ShadercCompiler::new()
+            .ok_or_else(|| BentoError::ShaderCompilation("Failed to initialize compiler".into()))?;
 
-        Self { compiler }
+        Ok(Self { compiler })
     }
 
     pub fn compile(
@@ -149,7 +149,12 @@ impl Compiler {
         path: &str,
         request: &Request,
     ) -> Result<CompilationResult, BentoError> {
-        let bytes = fs::read(path)?;
+        let bytes = fs::read(path).map_err(|e| {
+            BentoError::Io(std::io::Error::new(
+                e.kind(),
+                format!("{path}: {e}"),
+            ))
+        })?;
         let mut result = self.compile(&bytes, request)?;
         result.file = Some(path.to_string());
 
@@ -313,7 +318,7 @@ mod tests {
 
     #[test]
     fn compiles_shader_source() -> Result<(), BentoError> {
-        let compiler = Compiler::new();
+        let compiler = Compiler::new()?;
         let shader = include_str!("../tests/fixtures/simple_compute.glsl");
         let request = sample_request();
 
@@ -336,7 +341,7 @@ mod tests {
 
     #[test]
     fn compiles_shader_from_file() -> Result<(), BentoError> {
-        let compiler = Compiler::new();
+        let compiler = Compiler::new()?;
         let request = sample_request();
         let path = "tests/fixtures/simple_compute.glsl";
 
@@ -350,7 +355,7 @@ mod tests {
 
     #[test]
     fn returns_error_for_missing_file() {
-        let compiler = Compiler::new();
+        let compiler = Compiler::new().unwrap();
         let request = sample_request();
         let missing_path = "tests/fixtures/does_not_exist.glsl";
 
@@ -363,7 +368,7 @@ mod tests {
 
     #[test]
     fn returns_error_for_invalid_shader() {
-        let compiler = Compiler::new();
+        let compiler = Compiler::new().unwrap();
         let request = sample_request();
         let shader = b"#version 450\nvoid main() {";
 
