@@ -4,7 +4,7 @@ use std::{fs, path::Path};
 use serde::{Deserialize, Serialize};
 use shaderc::{
     CompileOptions, Compiler as ShadercCompiler, EnvVersion, OptimizationLevel as ShadercOpt,
-    ShaderKind, SourceLanguage, TargetEnv,
+    ShaderKind, SourceLanguage, SpirvVersion, TargetEnv,
 };
 
 pub use error::*;
@@ -112,6 +112,7 @@ impl Compiler {
 
         options.set_source_language(source_language(request.lang)?);
         options.set_target_env(TargetEnv::Vulkan, EnvVersion::Vulkan1_2 as u32);
+        options.set_target_spirv(SpirvVersion::V1_3);
         options.set_optimization_level(shaderc_optimization(request.optimization));
 
         if request.debug_symbols {
