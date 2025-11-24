@@ -20,4 +20,6 @@ bentocc tests/fixtures/simple_compute.glsl \
     --verbose
 ```
 
+Supported languages include GLSL, HLSL, and Slang via the `--lang` flag.
+
 The command prints metadata about the compiled shader when `--verbose` is provided and writes the binary artifact to the path specified by `--output`.

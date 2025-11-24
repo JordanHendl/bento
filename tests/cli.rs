@@ -37,6 +37,70 @@ fn compiles_shader_via_cli() {
 }
 
 #[test]
+fn compiles_hlsl_shader_via_cli() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let output = tmp_dir.path().join("simple_compute_hlsl.bin");
+
+    cargo_bin_cmd!("bentosc")
+        .args([
+            "tests/fixtures/simple_compute.hlsl",
+            "--stage",
+            "compute",
+            "--lang",
+            "hlsl",
+            "--opt",
+            "performance",
+            "--output",
+            output.to_str().unwrap(),
+            "--name",
+            "simple_compute_hlsl",
+            "--verbose",
+        ])
+        .assert()
+        .success();
+
+    assert!(output.exists());
+
+    let result = bento::CompilationResult::load_from_disk(output.to_str().unwrap()).unwrap();
+    assert_eq!(result.stage, dashi::ShaderType::Compute);
+    assert_eq!(result.lang, bento::ShaderLang::Hlsl);
+    assert!(result.variables.len() > 0);
+    assert!(!result.spirv.is_empty());
+}
+
+#[test]
+fn compiles_slang_shader_via_cli() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let output = tmp_dir.path().join("simple_compute_slang.bin");
+
+    cargo_bin_cmd!("bentosc")
+        .args([
+            "tests/fixtures/simple_compute.slang",
+            "--stage",
+            "compute",
+            "--lang",
+            "slang",
+            "--opt",
+            "performance",
+            "--output",
+            output.to_str().unwrap(),
+            "--name",
+            "simple_compute_slang",
+            "--verbose",
+        ])
+        .assert()
+        .success();
+
+    assert!(output.exists());
+
+    let result = bento::CompilationResult::load_from_disk(output.to_str().unwrap()).unwrap();
+    assert_eq!(result.stage, dashi::ShaderType::Compute);
+    assert_eq!(result.lang, bento::ShaderLang::Slang);
+    assert!(result.variables.len() > 0);
+    assert!(!result.spirv.is_empty());
+}
+
+#[test]
 fn fails_gracefully_for_missing_shader() {
     cargo_bin_cmd!("bentosc")
         .args([
