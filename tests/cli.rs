@@ -7,7 +7,7 @@ fn compiles_shader_via_cli() {
     let tmp_dir = tempfile::tempdir().unwrap();
     let output = tmp_dir.path().join("simple_compute.bin");
 
-    cargo_bin_cmd!("bentocc")
+    cargo_bin_cmd!("bentosc")
         .args([
             "tests/fixtures/simple_compute.glsl",
             "--stage",
@@ -38,7 +38,7 @@ fn compiles_shader_via_cli() {
 
 #[test]
 fn fails_gracefully_for_missing_shader() {
-    cargo_bin_cmd!("bentocc")
+    cargo_bin_cmd!("bentosc")
         .args([
             "tests/fixtures/does_not_exist.glsl",
             "--stage",
