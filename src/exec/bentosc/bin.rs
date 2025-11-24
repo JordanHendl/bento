@@ -1,5 +1,6 @@
 use bento::{Compiler, OptimizationLevel, Request, ShaderLang};
 use clap::{ArgAction, Parser, ValueEnum};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, ValueEnum)]
 enum LangArg {
@@ -84,7 +85,7 @@ struct Args {
     debug_symbols: bool,
 
     /// Output path for the compiled artifact
-    #[arg(short, long, value_name = "PATH")]
+    #[arg(short, long, value_name = "PATH", default_value = "out.bto")]
     output: String,
 
     /// Optional name for the shader entry
@@ -121,7 +122,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         print_metadata(&result);
     }
 
-    result.save_to_disk(&args.output)?;
+    let output_path = ensure_bto_extension(&args.output);
+    result.save_to_disk(output_path.to_str().unwrap())?;
 
     Ok(())
 }
@@ -142,4 +144,10 @@ fn print_metadata(result: &bento::CompilationResult) {
     }
     let byte_size = result.spirv.len() * std::mem::size_of::<u32>();
     println!("Output size: {} bytes", byte_size);
+}
+
+fn ensure_bto_extension(path: &str) -> PathBuf {
+    let mut path = PathBuf::from(path);
+    path.set_extension("bto");
+    path
 }
