@@ -100,4 +100,72 @@ fn coerces_output_extension_to_bto() {
         .success();
 
     assert!(expected_output.exists());
+fn inspects_saved_artifact() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let path = tmp_dir.path().join("artifact.bin");
+
+    let artifact = bento::CompilationResult {
+        name: Some("example".to_string()),
+        file: Some("shader.glsl".to_string()),
+        lang: bento::ShaderLang::Glsl,
+        stage: dashi::ShaderType::Compute,
+        variables: vec![bento::ShaderVariable {
+            name: "u_time".to_string(),
+            kind: dashi::BindGroupVariable {
+                var_type: dashi::BindGroupVariableType::Uniform,
+                binding: 0,
+                count: 1,
+            },
+        }],
+        spirv: vec![0x0723_0203, 1, 2],
+    };
+
+    artifact
+        .save_to_disk(path.to_str().unwrap())
+        .expect("failed to save artifact");
+
+    cargo_bin_cmd!("bentoinspect")
+        .arg(path.to_str().unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("example"))
+        .stdout(predicate::str::contains("Compute"))
+        .stdout(predicate::str::contains("binding 0"))
+        .stdout(predicate::str::contains("Output size: 12 bytes"));
+}
+
+#[test]
+fn outputs_json_when_requested() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let path = tmp_dir.path().join("artifact.bin");
+
+    let artifact = bento::CompilationResult {
+        name: Some("json_example".to_string()),
+        file: None,
+        lang: bento::ShaderLang::Hlsl,
+        stage: dashi::ShaderType::Fragment,
+        variables: vec![],
+        spirv: vec![1, 2, 3, 4],
+    };
+
+    artifact
+        .save_to_disk(path.to_str().unwrap())
+        .expect("failed to save artifact");
+
+    let output = cargo_bin_cmd!("bentoinspect")
+        .args([path.to_str().unwrap(), "--json"])
+        .output()
+        .expect("failed to run bentoinspect");
+
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout is not UTF-8");
+    let value: serde_json::Value =
+        serde_json::from_str(&stdout).expect("stdout is not valid JSON");
+
+    assert_eq!(value["name"], "json_example");
+    assert_eq!(value["file"], serde_json::Value::Null);
+    assert_eq!(value["lang"], "Hlsl");
+    assert_eq!(value["stage"], "Fragment");
+    assert_eq!(value["spirv"], serde_json::json!([1, 2, 3, 4]));
 }
