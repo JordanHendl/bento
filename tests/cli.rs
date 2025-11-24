@@ -29,8 +29,7 @@ fn compiles_shader_via_cli() {
 
     assert!(actual_output.exists());
 
-    let result =
-        bento::CompilationResult::load_from_disk(actual_output.to_str().unwrap()).unwrap();
+    let result = bento::CompilationResult::load_from_disk(actual_output.to_str().unwrap()).unwrap();
     assert_eq!(result.stage, dashi::ShaderType::Compute);
     assert_eq!(result.lang, bento::ShaderLang::Glsl);
     assert!(result.variables.len() > 0);
@@ -42,7 +41,7 @@ fn compiles_shader_via_cli() {
 #[test]
 fn compiles_hlsl_shader_via_cli() {
     let tmp_dir = tempfile::tempdir().unwrap();
-    let output = tmp_dir.path().join("simple_compute_hlsl.bin");
+    let output = tmp_dir.path().join("simple_compute_hlsl.bto");
 
     cargo_bin_cmd!("bentosc")
         .args([
@@ -74,7 +73,7 @@ fn compiles_hlsl_shader_via_cli() {
 #[test]
 fn compiles_slang_shader_via_cli() {
     let tmp_dir = tempfile::tempdir().unwrap();
-    let output = tmp_dir.path().join("simple_compute_slang.bin");
+    let output = tmp_dir.path().join("simple_compute_slang.bto");
 
     cargo_bin_cmd!("bentosc")
         .args([
@@ -164,6 +163,8 @@ fn coerces_output_extension_to_bto() {
         .success();
 
     assert!(expected_output.exists());
+}
+
 fn inspects_saved_artifact() {
     let tmp_dir = tempfile::tempdir().unwrap();
     let path = tmp_dir.path().join("artifact.bin");
@@ -224,8 +225,7 @@ fn outputs_json_when_requested() {
     assert!(output.status.success());
 
     let stdout = String::from_utf8(output.stdout).expect("stdout is not UTF-8");
-    let value: serde_json::Value =
-        serde_json::from_str(&stdout).expect("stdout is not valid JSON");
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("stdout is not valid JSON");
 
     assert_eq!(value["name"], "json_example");
     assert_eq!(value["file"], serde_json::Value::Null);
