@@ -81,6 +81,13 @@ impl CompilationResult {
         let bytes = fs::read(path)?;
         Self::from_bytes(&bytes)
     }
+
+    pub fn bind_group_variables(&self) -> Vec<dashi::BindGroupVariable> {
+        let s: Vec<dashi::BindGroupVariable> =
+            self.variables.iter().map(|a| a.kind.clone()).collect();
+
+        return s;
+    }
 }
 
 //////////////////////////////////////////////////////////////////////////////
