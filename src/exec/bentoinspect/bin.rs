@@ -1,6 +1,7 @@
 use bento::CompilationResult;
 use clap::{ArgAction, Parser};
 
+/// CLI arguments for inspecting Bento Files and their metadata.
 #[derive(Debug, Parser)]
 #[command(author, version, about = "Inspect Bento shader artifacts", long_about = None)]
 struct Args {
