@@ -1,25 +1,29 @@
 [BENTO]
 
-Crate to package up shaders and their associated info into a binary file format. Also supports inspecting and loading this format.
+Bento packages shaders and their associated metadata into the Bento Format, a compact binary layout designed around SPIR-V output. Each compiled artifact is a Bento File that captures the shader stage, bind group variables, and the generated SPIR-V payload so callers can load or inspect the output without re-running the compiler.
 
-Aiming to support GLSL, HLSL, and Slang reflection.
+## Project overview
 
-Output binary format is SPIR-V.
+* **Supported sources**: GLSL, HLSL, and Slang, reflected through shaderc and rspirv-reflect.
+* **Artifacts**: Bento Files contain the serialized `CompilationResult`, including reflection data and SPIR-V words.
+* **Tooling**: Two binaries ship with the crate:
+  * `bentosc` compiles shaders into the Bento Format.
+  * `bentoinspect` reads an existing Bento File and emits a summary or pretty JSON.
 
 ## CLI usage
 
-The `bentocc` binary compiles shader sources into serialized `CompilationResult` files. Typical usage:
+The `bentosc` binary compiles shader sources into serialized Bento Files. Typical usage:
 
 ```
-bentocc tests/fixtures/simple_compute.glsl \
+bentosc tests/fixtures/simple_compute.glsl \
     --stage compute \
     --lang glsl \
     --opt performance \
-    --output target/simple_compute.bin \
+    --output target/simple_compute.bto \
     --name simple_compute \
     --verbose
 ```
 
 Supported languages include GLSL, HLSL, and Slang via the `--lang` flag.
 
-The command prints metadata about the compiled shader when `--verbose` is provided and writes the binary artifact to the path specified by `--output`.
+The command prints metadata about the compiled shader when `--verbose` is provided and writes the Bento File to the path specified by `--output`.

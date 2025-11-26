@@ -1,5 +1,6 @@
 use thiserror::Error;
 
+/// Error variants surfaced by Bento shader compilation and inspection routines.
 #[derive(Debug, Error)]
 pub enum BentoError {
     #[error("I/O error: {0}")]

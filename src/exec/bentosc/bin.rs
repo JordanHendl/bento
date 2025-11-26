@@ -2,6 +2,7 @@ use bento::{Compiler, OptimizationLevel, Request, ShaderLang};
 use clap::{ArgAction, Parser, ValueEnum};
 use std::path::PathBuf;
 
+/// Command-line representation of supported shader languages.
 #[derive(Debug, Clone, ValueEnum)]
 enum LangArg {
     Slang,
@@ -21,6 +22,7 @@ impl From<LangArg> for ShaderLang {
     }
 }
 
+/// Command-line representation of shader stages.
 #[derive(Debug, Clone, ValueEnum)]
 enum StageArg {
     Vertex,
@@ -38,6 +40,7 @@ impl From<StageArg> for dashi::ShaderType {
     }
 }
 
+/// Command-line optimization levels for the Bento compiler.
 #[derive(Debug, Clone, ValueEnum)]
 enum OptArg {
     None,
@@ -56,6 +59,7 @@ impl From<OptArg> for OptimizationLevel {
     }
 }
 
+/// CLI surface for converting shader sources into Bento Files.
 #[derive(Debug, Parser)]
 #[command(author, version, about = "Compile shaders into Bento artifacts", long_about = None)]
 struct Args {

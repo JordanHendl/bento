@@ -9,6 +9,7 @@ use shaderc::{
 
 pub use error::*;
 
+/// Supported input languages for Bento shader compilation.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ShaderLang {
     Slang,
@@ -17,6 +18,7 @@ pub enum ShaderLang {
     Other,
 }
 
+/// Controls how aggressively Bento optimizes shader bytecode.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum OptimizationLevel {
     None,
@@ -24,12 +26,14 @@ pub enum OptimizationLevel {
     Performance,
 }
 
+/// Representation of a bind group variable discovered during reflection.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ShaderVariable {
     pub name: String,
     pub kind: dashi::BindGroupVariable,
 }
 
+/// Parameters describing how a shader should be compiled into a Bento File.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Request {
     pub name: Option<String>,
@@ -39,6 +43,7 @@ pub struct Request {
     pub debug_symbols: bool,
 }
 
+/// Serialized result produced after compiling a shader into the Bento Format.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CompilationResult {
     pub name: Option<String>,
@@ -94,6 +99,7 @@ impl CompilationResult {
 //////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////
 
+/// High-level wrapper around shaderc that emits Bento Files.
 pub struct Compiler {
     compiler: ShadercCompiler,
 }
