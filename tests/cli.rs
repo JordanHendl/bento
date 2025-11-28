@@ -182,6 +182,12 @@ fn inspects_saved_artifact() {
                 count: 1,
             },
         }],
+        metadata: bento::ShaderMetadata {
+            entry_points: vec!["main".to_string()],
+            inputs: vec![],
+            outputs: vec![],
+            workgroup_size: Some([1, 1, 1]),
+        },
         spirv: vec![0x0723_0203, 1, 2],
     };
 
@@ -210,6 +216,12 @@ fn outputs_json_when_requested() {
         lang: bento::ShaderLang::Hlsl,
         stage: dashi::ShaderType::Fragment,
         variables: vec![],
+        metadata: bento::ShaderMetadata {
+            entry_points: vec!["main".to_string()],
+            inputs: vec![],
+            outputs: vec![],
+            workgroup_size: None,
+        },
         spirv: vec![1, 2, 3, 4],
     };
 
