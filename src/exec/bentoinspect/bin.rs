@@ -50,9 +50,40 @@ fn print_summary(result: &CompilationResult) {
     println!("Variables:");
     for var in &result.variables {
         println!(
-            "  {} -> binding {} ({:?}), count {}",
-            var.name, var.kind.binding, var.kind.var_type, var.kind.count
+            "  {} -> set {}, binding {} ({:?}), count {}",
+            var.name, var.set, var.kind.binding, var.kind.var_type, var.kind.count
         );
+    }
+
+    if !result.metadata.entry_points.is_empty() {
+        println!("Entry points:");
+        for entry in &result.metadata.entry_points {
+            println!("  {entry}");
+        }
+    }
+
+    if !result.metadata.inputs.is_empty() {
+        println!("Inputs:");
+        for input in &result.metadata.inputs {
+            match input.location {
+                Some(location) => println!("  @location({location}) {}", input.name),
+                None => println!("  {}", input.name),
+            }
+        }
+    }
+
+    if !result.metadata.outputs.is_empty() {
+        println!("Outputs:");
+        for output in &result.metadata.outputs {
+            match output.location {
+                Some(location) => println!("  @location({location}) {}", output.name),
+                None => println!("  {}", output.name),
+            }
+        }
+    }
+
+    if let Some([x, y, z]) = result.metadata.workgroup_size {
+        println!("Workgroup size: {x} x {y} x {z}");
     }
 
     println!("SPIR-V words: {}", result.spirv.len());

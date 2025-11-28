@@ -165,6 +165,7 @@ fn coerces_output_extension_to_bto() {
     assert!(expected_output.exists());
 }
 
+#[test]
 fn inspects_saved_artifact() {
     let tmp_dir = tempfile::tempdir().unwrap();
     let path = tmp_dir.path().join("artifact.bin");
@@ -176,12 +177,19 @@ fn inspects_saved_artifact() {
         stage: dashi::ShaderType::Compute,
         variables: vec![bento::ShaderVariable {
             name: "u_time".to_string(),
+            set: 0,
             kind: dashi::BindGroupVariable {
                 var_type: dashi::BindGroupVariableType::Uniform,
                 binding: 0,
                 count: 1,
             },
         }],
+        metadata: bento::ShaderMetadata {
+            entry_points: vec!["main".to_string()],
+            inputs: vec![],
+            outputs: vec![],
+            workgroup_size: Some([1, 1, 1]),
+        },
         spirv: vec![0x0723_0203, 1, 2],
     };
 
@@ -195,7 +203,7 @@ fn inspects_saved_artifact() {
         .success()
         .stdout(predicate::str::contains("example"))
         .stdout(predicate::str::contains("Compute"))
-        .stdout(predicate::str::contains("binding 0"))
+        .stdout(predicate::str::contains("set 0, binding 0"))
         .stdout(predicate::str::contains("Output size: 12 bytes"));
 }
 
@@ -210,6 +218,12 @@ fn outputs_json_when_requested() {
         lang: bento::ShaderLang::Hlsl,
         stage: dashi::ShaderType::Fragment,
         variables: vec![],
+        metadata: bento::ShaderMetadata {
+            entry_points: vec!["main".to_string()],
+            inputs: vec![],
+            outputs: vec![],
+            workgroup_size: None,
+        },
         spirv: vec![1, 2, 3, 4],
     };
 

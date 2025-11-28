@@ -1,5 +1,5 @@
 pub mod error;
-use std::{fs, path::Path};
+use std::{collections::HashMap, fs, path::Path};
 
 use serde::{Deserialize, Serialize};
 use shaderc::{
@@ -30,7 +30,25 @@ pub enum OptimizationLevel {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ShaderVariable {
     pub name: String,
+    #[serde(default)]
+    pub set: u32,
     pub kind: dashi::BindGroupVariable,
+}
+
+/// Stage-specific metadata discovered during reflection.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ShaderMetadata {
+    pub entry_points: Vec<String>,
+    pub inputs: Vec<InterfaceVariable>,
+    pub outputs: Vec<InterfaceVariable>,
+    pub workgroup_size: Option<[u32; 3]>,
+}
+
+/// Representation of a shader interface variable (inputs/outputs).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InterfaceVariable {
+    pub name: String,
+    pub location: Option<u32>,
 }
 
 /// Parameters describing how a shader should be compiled into a Bento File.
@@ -51,6 +69,7 @@ pub struct CompilationResult {
     pub lang: ShaderLang,
     pub stage: dashi::ShaderType,
     pub variables: Vec<ShaderVariable>,
+    pub metadata: ShaderMetadata,
     pub spirv: Vec<u32>,
 }
 
@@ -146,7 +165,9 @@ impl Compiler {
             .map_err(|e| BentoError::ShaderCompilation(e.to_string()))?;
 
         let spirv = artifact.as_binary().to_vec();
-        let variables = reflect_bindings(artifact.as_binary_u8())?;
+        let spirv_bytes = artifact.as_binary_u8();
+        let variables = reflect_bindings(spirv_bytes)?;
+        let metadata = reflect_metadata(spirv_bytes)?;
 
         Ok(CompilationResult {
             name: request.name.clone(),
@@ -154,6 +175,7 @@ impl Compiler {
             lang: request.lang,
             stage: request.stage,
             variables,
+            metadata,
             spirv,
         })
     }
@@ -213,7 +235,7 @@ fn reflect_bindings(spirv_bytes: &[u8]) -> Result<Vec<ShaderVariable>, BentoErro
         .get_descriptor_sets()
         .map_err(|e| BentoError::ShaderCompilation(e.to_string()))?;
 
-    for bindings in descriptor_sets.values() {
+    for (set, bindings) in descriptor_sets.iter() {
         for (binding, info) in bindings.iter() {
             let var_type = match info.ty {
                 DescriptorType::UNIFORM_BUFFER => dashi::BindGroupVariableType::Uniform,
@@ -240,6 +262,7 @@ fn reflect_bindings(spirv_bytes: &[u8]) -> Result<Vec<ShaderVariable>, BentoErro
 
             variables.push(ShaderVariable {
                 name: info.name.clone(),
+                set: *set,
                 kind: dashi::BindGroupVariable {
                     var_type,
                     binding: *binding,
@@ -249,9 +272,108 @@ fn reflect_bindings(spirv_bytes: &[u8]) -> Result<Vec<ShaderVariable>, BentoErro
         }
     }
 
-    variables.sort_by_key(|v| v.kind.binding);
+    variables.sort_by(|a, b| a.set.cmp(&b.set).then_with(|| a.kind.binding.cmp(&b.kind.binding)));
 
     Ok(variables)
+}
+
+fn reflect_metadata(spirv_bytes: &[u8]) -> Result<ShaderMetadata, BentoError> {
+    use rspirv_reflect::{spirv, Reflection};
+
+    let reflection = Reflection::new_from_spirv(spirv_bytes)
+        .map_err(|e| BentoError::ShaderCompilation(e.to_string()))?;
+    let module = &reflection.0;
+
+    let mut names = HashMap::new();
+    for instruction in &module.debug_names {
+        if instruction.class.opcode == spirv::Op::Name {
+            if let (Some(rspirv_reflect::rspirv::dr::Operand::IdRef(id)), Some(rspirv_reflect::rspirv::dr::Operand::LiteralString(name))) =
+                (instruction.operands.get(0), instruction.operands.get(1))
+            {
+                let id = *id;
+                names.insert(id, name.clone());
+            }
+        }
+    }
+
+    let mut locations = HashMap::new();
+    for instruction in &module.annotations {
+        if instruction.class.opcode == spirv::Op::Decorate {
+            if let (
+                Some(rspirv_reflect::rspirv::dr::Operand::IdRef(id)),
+                Some(rspirv_reflect::rspirv::dr::Operand::Decoration(decoration)),
+                Some(rspirv_reflect::rspirv::dr::Operand::LiteralBit32(location)),
+            ) = (
+                instruction.operands.get(0),
+                instruction.operands.get(1),
+                instruction.operands.get(2),
+            ) {
+                if *decoration == spirv::Decoration::Location {
+                    let id = *id;
+                    locations.insert(id, *location);
+                }
+            }
+        }
+    }
+
+    let mut inputs = Vec::new();
+    let mut outputs = Vec::new();
+    for instruction in &module.types_global_values {
+        if instruction.class.opcode != spirv::Op::Variable {
+            continue;
+        }
+
+        let Some(id) = instruction.result_id else { continue };
+        let Some(rspirv_reflect::rspirv::dr::Operand::StorageClass(storage_class)) =
+            instruction.operands.get(0)
+        else {
+            continue;
+        };
+
+        let name = names
+            .get(&id)
+            .cloned()
+            .unwrap_or_else(|| format!("var_{id}"));
+        let location = locations.get(&id).copied();
+        let variable = InterfaceVariable { name, location };
+
+        match storage_class {
+            spirv::StorageClass::Input => inputs.push(variable),
+            spirv::StorageClass::Output => outputs.push(variable),
+            _ => {}
+        }
+    }
+
+    inputs.sort_by(|a, b| a.location.cmp(&b.location).then_with(|| a.name.cmp(&b.name)));
+    outputs.sort_by(|a, b| a.location.cmp(&b.location).then_with(|| a.name.cmp(&b.name)));
+
+    let entry_points = module
+        .entry_points
+        .iter()
+        .filter_map(|instruction| {
+            if instruction.class.opcode != spirv::Op::EntryPoint {
+                return None;
+            }
+
+            match instruction.operands.get(2) {
+                Some(rspirv_reflect::rspirv::dr::Operand::LiteralString(name)) => {
+                    Some(name.clone())
+                }
+                _ => None,
+            }
+        })
+        .collect();
+
+    let workgroup_size = reflection
+        .get_compute_group_size()
+        .map(|(x, y, z)| [x, y, z]);
+
+    Ok(ShaderMetadata {
+        entry_points,
+        inputs,
+        outputs,
+        workgroup_size,
+    })
 }
 
 #[cfg(test)]
@@ -270,12 +392,19 @@ mod tests {
             stage: dashi::ShaderType::Compute,
             variables: vec![ShaderVariable {
                 name: "u_time".to_string(),
+                set: 0,
                 kind: dashi::BindGroupVariable {
                     var_type: dashi::BindGroupVariableType::Uniform,
                     binding: 0,
                     count: 1,
                 },
             }],
+            metadata: ShaderMetadata {
+                entry_points: vec!["main".to_string()],
+                inputs: vec![],
+                outputs: vec![],
+                workgroup_size: Some([1, 1, 1]),
+            },
             spirv: vec![0x0723_0203, 1, 2, 3],
         }
     }
@@ -345,6 +474,8 @@ mod tests {
             result.variables[0].kind.var_type,
             dashi::BindGroupVariableType::Storage
         );
+        assert!(result.metadata.entry_points.contains(&"main".to_string()));
+        assert_eq!(result.metadata.workgroup_size, Some([1, 1, 1]));
 
         Ok(())
     }
@@ -359,6 +490,7 @@ mod tests {
 
         assert_eq!(result.file.as_deref(), Some(path));
         assert!(!result.spirv.is_empty());
+        assert!(result.metadata.entry_points.contains(&"main".to_string()));
 
         Ok(())
     }

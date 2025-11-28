@@ -23,6 +23,8 @@ fn compiles_fixture_shader() -> Result<(), BentoError> {
     assert_eq!(result.lang, ShaderLang::Glsl);
     assert!(!result.spirv.is_empty());
     assert!(!result.variables.is_empty());
+    assert!(result.metadata.entry_points.contains(&"main".to_string()));
+    assert_eq!(result.metadata.workgroup_size, Some([1, 1, 1]));
 
     Ok(())
 }
