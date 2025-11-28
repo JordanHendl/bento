@@ -189,6 +189,7 @@ fn inspects_saved_artifact() {
             inputs: vec![],
             outputs: vec![],
             workgroup_size: Some([1, 1, 1]),
+            vertex: None,
         },
         spirv: vec![0x0723_0203, 1, 2],
     };
@@ -223,6 +224,7 @@ fn outputs_json_when_requested() {
             inputs: vec![],
             outputs: vec![],
             workgroup_size: None,
+            vertex: None,
         },
         spirv: vec![1, 2, 3, 4],
     };
