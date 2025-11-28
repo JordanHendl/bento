@@ -30,6 +30,8 @@ pub enum OptimizationLevel {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ShaderVariable {
     pub name: String,
+    #[serde(default)]
+    pub set: u32,
     pub kind: dashi::BindGroupVariable,
 }
 
@@ -233,7 +235,7 @@ fn reflect_bindings(spirv_bytes: &[u8]) -> Result<Vec<ShaderVariable>, BentoErro
         .get_descriptor_sets()
         .map_err(|e| BentoError::ShaderCompilation(e.to_string()))?;
 
-    for bindings in descriptor_sets.values() {
+    for (set, bindings) in descriptor_sets.iter() {
         for (binding, info) in bindings.iter() {
             let var_type = match info.ty {
                 DescriptorType::UNIFORM_BUFFER => dashi::BindGroupVariableType::Uniform,
@@ -260,6 +262,7 @@ fn reflect_bindings(spirv_bytes: &[u8]) -> Result<Vec<ShaderVariable>, BentoErro
 
             variables.push(ShaderVariable {
                 name: info.name.clone(),
+                set: *set,
                 kind: dashi::BindGroupVariable {
                     var_type,
                     binding: *binding,
@@ -269,7 +272,7 @@ fn reflect_bindings(spirv_bytes: &[u8]) -> Result<Vec<ShaderVariable>, BentoErro
         }
     }
 
-    variables.sort_by_key(|v| v.kind.binding);
+    variables.sort_by(|a, b| a.set.cmp(&b.set).then_with(|| a.kind.binding.cmp(&b.kind.binding)));
 
     Ok(variables)
 }
@@ -389,6 +392,7 @@ mod tests {
             stage: dashi::ShaderType::Compute,
             variables: vec![ShaderVariable {
                 name: "u_time".to_string(),
+                set: 0,
                 kind: dashi::BindGroupVariable {
                     var_type: dashi::BindGroupVariableType::Uniform,
                     binding: 0,

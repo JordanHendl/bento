@@ -50,8 +50,8 @@ fn print_summary(result: &CompilationResult) {
     println!("Variables:");
     for var in &result.variables {
         println!(
-            "  {} -> binding {} ({:?}), count {}",
-            var.name, var.kind.binding, var.kind.var_type, var.kind.count
+            "  {} -> set {}, binding {} ({:?}), count {}",
+            var.name, var.set, var.kind.binding, var.kind.var_type, var.kind.count
         );
     }
 
