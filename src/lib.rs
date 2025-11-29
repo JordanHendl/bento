@@ -1,10 +1,16 @@
 pub mod error;
 use std::{collections::HashMap, fs, path::Path};
 
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use shaderc::{
     CompileOptions, Compiler as ShadercCompiler, EnvVersion, OptimizationLevel as ShadercOpt,
     ShaderKind, SourceLanguage, SpirvVersion, TargetEnv,
+};
+use rspirv::{
+    binary::Assemble,
+    dr::{Instruction, Operand},
+    spirv,
 };
 
 pub use error::*;
@@ -231,15 +237,18 @@ impl Pipeline {
 //////////////////////////////////////////////////////////////////////////////
 impl ShaderMetadata {
     pub fn vertex_inputs(&self) -> Vec<dashi::VertexEntryInfo> {
-        self.inputs.iter().map(|a| {
-            // TODO: Get format from input, location, and calculate offsets assuming data is
-            // packed.
-            dashi::VertexEntryInfo {
-                format: todo!(),
-                location: todo!(),
-                offset: todo!(),
-            }
-        }).collect()
+        self.inputs
+            .iter()
+            .map(|a| {
+                // TODO: Get format from input, location, and calculate offsets assuming data is
+                // packed.
+                dashi::VertexEntryInfo {
+                    format: todo!(),
+                    location: todo!(),
+                    offset: todo!(),
+                }
+            })
+            .collect()
     }
 }
 
@@ -330,9 +339,11 @@ impl Compiler {
             )
             .map_err(|e| BentoError::ShaderCompilation(e.to_string()))?;
 
-        let spirv = artifact.as_binary().to_vec();
-        let spirv_bytes = artifact.as_binary_u8();
-        let variables = reflect_bindings(spirv_bytes)?;
+        let mut spirv = artifact.as_binary().to_vec();
+        let spirv_bytes = spirv_words_to_bytes(&spirv);
+        let variables = reflect_bindings(spirv_bytes, source, request.lang)?;
+        spirv = rewrite_spirv_binding_names(&spirv, &variables)?;
+        let spirv_bytes = spirv_words_to_bytes(&spirv);
         let metadata = reflect_metadata(spirv_bytes)?;
 
         Ok(CompilationResult {
@@ -389,20 +400,40 @@ fn shaderc_optimization(level: OptimizationLevel) -> ShadercOpt {
     }
 }
 
-fn reflect_bindings(spirv_bytes: &[u8]) -> Result<Vec<ShaderVariable>, BentoError> {
+#[derive(Debug, Clone)]
+struct SourceBinding {
+    set: u32,
+    binding: Option<u32>,
+    name: String,
+    order: usize,
+}
+
+fn spirv_words_to_bytes(words: &[u32]) -> &[u8] {
+    unsafe { std::slice::from_raw_parts(words.as_ptr() as *const u8, words.len() * 4) }
+}
+
+fn reflect_bindings(
+    spirv_bytes: &[u8],
+    source: &str,
+    lang: ShaderLang,
+) -> Result<Vec<ShaderVariable>, BentoError> {
     use rspirv_reflect::{BindingCount, DescriptorType, Reflection};
 
     let reflection = Reflection::new_from_spirv(spirv_bytes)
         .map_err(|e| BentoError::ShaderCompilation(e.to_string()))?;
 
-    let mut variables = Vec::new();
-
+    let mut source_bindings = parse_source_bindings(source, lang)?;
     let descriptor_sets = reflection
         .get_descriptor_sets()
         .map_err(|e| BentoError::ShaderCompilation(e.to_string()))?;
 
+    let mut variables = Vec::new();
+
     for (set, bindings) in descriptor_sets.iter() {
         for (binding, info) in bindings.iter() {
+            let name = take_source_name(*set, *binding, &mut source_bindings)
+                .unwrap_or_else(|| info.name.clone());
+
             let var_type = match info.ty {
                 DescriptorType::UNIFORM_BUFFER => dashi::BindGroupVariableType::Uniform,
                 DescriptorType::UNIFORM_BUFFER_DYNAMIC => {
@@ -427,7 +458,7 @@ fn reflect_bindings(spirv_bytes: &[u8]) -> Result<Vec<ShaderVariable>, BentoErro
             };
 
             variables.push(ShaderVariable {
-                name: info.name.clone(),
+                name,
                 set: *set,
                 kind: dashi::BindGroupVariable {
                     var_type,
@@ -445,6 +476,206 @@ fn reflect_bindings(spirv_bytes: &[u8]) -> Result<Vec<ShaderVariable>, BentoErro
     });
 
     Ok(variables)
+}
+
+fn rewrite_spirv_binding_names(
+    spirv: &[u32],
+    variables: &[ShaderVariable],
+) -> Result<Vec<u32>, BentoError> {
+    use rspirv_reflect::Reflection;
+
+    let reflection = Reflection::new_from_spirv(spirv_words_to_bytes(spirv))
+        .map_err(|e| BentoError::ShaderCompilation(e.to_string()))?;
+    let mut module = reflection.0;
+
+    let mut binding_targets: HashMap<u32, (Option<u32>, Option<u32>)> = HashMap::new();
+
+    for annotation in &module.annotations {
+        if annotation.class.opcode != spirv::Op::Decorate {
+            continue;
+        }
+
+        let Some(Operand::IdRef(id)) = annotation.operands.get(0) else {
+            continue;
+        };
+        let Some(Operand::Decoration(decoration)) = annotation.operands.get(1) else {
+            continue;
+        };
+        let Some(Operand::LiteralBit32(value)) = annotation.operands.get(2) else {
+            continue;
+        };
+
+        let entry = binding_targets.entry(*id).or_default();
+
+        match decoration {
+            spirv::Decoration::DescriptorSet => entry.0 = Some(*value),
+            spirv::Decoration::Binding => entry.1 = Some(*value),
+            _ => {}
+        }
+    }
+
+    let mut ids_by_binding = HashMap::new();
+    for (id, (set, binding)) in binding_targets {
+        if let (Some(set), Some(binding)) = (set, binding) {
+            ids_by_binding.insert((set, binding), id);
+        }
+    }
+
+    for variable in variables {
+        let Some(id) = ids_by_binding.get(&(variable.set, variable.kind.binding)) else {
+            continue;
+        };
+
+        let mut renamed = false;
+        for instruction in module.debug_names.iter_mut() {
+            if instruction.class.opcode != spirv::Op::Name {
+                continue;
+            }
+
+            match instruction.operands.get(0) {
+                Some(Operand::IdRef(existing)) if existing == id => {
+                    if instruction.operands.len() >= 2 {
+                        instruction.operands[1] = Operand::LiteralString(variable.name.clone());
+                    } else {
+                        instruction
+                            .operands
+                            .push(Operand::LiteralString(variable.name.clone()));
+                    }
+                    renamed = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+
+        if !renamed {
+            module.debug_names.push(Instruction::new(
+                spirv::Op::Name,
+                None,
+                None,
+                vec![
+                    Operand::IdRef(*id),
+                    Operand::LiteralString(variable.name.clone()),
+                ],
+            ));
+        }
+    }
+
+    Ok(module.assemble())
+}
+
+fn parse_source_bindings(source: &str, lang: ShaderLang) -> Result<Vec<SourceBinding>, BentoError> {
+    match lang {
+        ShaderLang::Glsl => parse_glsl_bindings(source),
+        ShaderLang::Hlsl | ShaderLang::Slang => parse_hlsl_like_bindings(source),
+        ShaderLang::Other => Err(BentoError::InvalidInput(
+            "Unsupported shader language for reflection".into(),
+        )),
+    }
+}
+
+fn parse_glsl_bindings(source: &str) -> Result<Vec<SourceBinding>, BentoError> {
+    let regex =
+        Regex::new(r"layout\s*\(\s*set\s*=\s*(\d+)\s*,\s*binding\s*=\s*(\d+)\s*\)\s*([^;]+);")
+            .map_err(|e| {
+                BentoError::ShaderCompilation(format!("Invalid GLSL reflection regex: {e}"))
+            })?;
+
+    Ok(regex
+        .captures_iter(source)
+        .enumerate()
+        .filter_map(|(index, captures)| {
+            let set = captures
+                .get(1)
+                .and_then(|m| m.as_str().parse::<u32>().ok())?;
+            let binding = captures
+                .get(2)
+                .and_then(|m| m.as_str().parse::<u32>().ok())?;
+            let declaration = captures.get(3).map(|m| m.as_str()).unwrap_or("");
+
+            let name = extract_name(declaration)?;
+
+            Some(SourceBinding {
+                set,
+                binding: Some(binding),
+                name,
+                order: index,
+            })
+        })
+        .collect())
+}
+
+fn parse_hlsl_like_bindings(source: &str) -> Result<Vec<SourceBinding>, BentoError> {
+    let resource_regex = Regex::new(
+        r"(?m)^\s*(?:RW?Texture\w+|RW?StructuredBuffer|StructuredBuffer|ByteAddressBuffer|RaytracingAccelerationStructure|AccelerationStructure|Texture\w+|Sampler\w*)[^;\n]*?\s+([A-Za-z_][A-Za-z0-9_]*)[^;\n]*?(?::\s*register\(\s*[tubcs]?\s*(\d+)\s*\))?",
+    )
+    .map_err(|e| BentoError::ShaderCompilation(format!("Invalid HLSL reflection regex: {e}")))?;
+
+    let cbuffer_regex = Regex::new(
+        r"(?m)^\s*(?:cbuffer|ConstantBuffer)\s+([A-Za-z_][A-Za-z0-9_]*)[^;\n]*?(?::\s*register\(\s*b(\d+)\s*\))?",
+    )
+    .map_err(|e| BentoError::ShaderCompilation(format!("Invalid constant buffer regex: {e}")))?;
+
+    let mut bindings = Vec::new();
+
+    for (index, captures) in resource_regex.captures_iter(source).enumerate() {
+        let name = captures
+            .get(1)
+            .map(|m| m.as_str().to_string())
+            .unwrap_or_else(|| format!("resource_{index}"));
+        let binding = captures.get(2).and_then(|m| m.as_str().parse::<u32>().ok());
+
+        bindings.push(SourceBinding {
+            set: 0,
+            binding,
+            name,
+            order: index,
+        });
+    }
+
+    let starting_index = bindings.len();
+    for (offset, captures) in cbuffer_regex.captures_iter(source).enumerate() {
+        let name = captures
+            .get(1)
+            .map(|m| m.as_str().to_string())
+            .unwrap_or_else(|| format!("cbuffer_{offset}"));
+        let binding = captures.get(2).and_then(|m| m.as_str().parse::<u32>().ok());
+
+        bindings.push(SourceBinding {
+            set: 0,
+            binding,
+            name,
+            order: starting_index + offset,
+        });
+    }
+
+    bindings.sort_by_key(|b| b.order);
+
+    Ok(bindings)
+}
+
+fn take_source_name(set: u32, binding: u32, sources: &mut Vec<SourceBinding>) -> Option<String> {
+    if let Some(index) = sources
+        .iter()
+        .position(|src| src.set == set && src.binding == Some(binding))
+    {
+        return Some(sources.swap_remove(index).name);
+    }
+
+    if let Some(index) = sources
+        .iter()
+        .position(|src| src.set == set && src.binding.is_none())
+    {
+        return Some(sources.swap_remove(index).name);
+    }
+
+    None
+}
+
+fn extract_name(declaration: &str) -> Option<String> {
+    let name_regex = Regex::new(r"([A-Za-z_][A-Za-z0-9_]*)\s*(?:\[\s*\d*\s*\])?\s*$").ok()?;
+    let captures = name_regex.captures(declaration)?;
+    captures.get(1).map(|m| m.as_str().to_string())
 }
 
 fn reflect_metadata(spirv_bytes: &[u8]) -> Result<ShaderMetadata, BentoError> {

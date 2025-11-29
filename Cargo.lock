@@ -117,6 +117,8 @@ dependencies = [
  "clap",
  "dashi",
  "predicates",
+ "regex",
+ "rspirv",
  "rspirv-reflect",
  "serde",
  "serde_json",
