@@ -42,6 +42,8 @@ pub struct ShaderMetadata {
     pub inputs: Vec<InterfaceVariable>,
     pub outputs: Vec<InterfaceVariable>,
     pub workgroup_size: Option<[u32; 3]>,
+    #[serde(default)]
+    pub vertex: Option<VertexLayout>,
 }
 
 /// Representation of a shader interface variable (inputs/outputs).
@@ -49,7 +51,33 @@ pub struct ShaderMetadata {
 pub struct InterfaceVariable {
     pub name: String,
     pub location: Option<u32>,
+    #[serde(default)]
+    pub format: Option<dashi::ShaderPrimitiveType>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VertexEntry {
+    pub format: dashi::ShaderPrimitiveType,
+    pub location: usize,
+    pub offset: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VertexLayout {
+    pub entries: Vec<VertexEntry>,
+    pub stride: usize,
+    pub rate: dashi::VertexRate,
+}
+
+impl PartialEq for VertexLayout {
+    fn eq(&self, other: &Self) -> bool {
+        self.entries == other.entries
+            && self.stride == other.stride
+            && std::mem::discriminant(&self.rate) == std::mem::discriminant(&other.rate)
+    }
+}
+
+impl Eq for VertexLayout {}
 
 /// Parameters describing how a shader should be compiled into a Bento File.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -285,13 +313,17 @@ fn reflect_bindings(spirv_bytes: &[u8]) -> Result<Vec<ShaderVariable>, BentoErro
         }
     }
 
-    variables.sort_by(|a, b| a.set.cmp(&b.set).then_with(|| a.kind.binding.cmp(&b.kind.binding)));
+    variables.sort_by(|a, b| {
+        a.set
+            .cmp(&b.set)
+            .then_with(|| a.kind.binding.cmp(&b.kind.binding))
+    });
 
     Ok(variables)
 }
 
 fn reflect_metadata(spirv_bytes: &[u8]) -> Result<ShaderMetadata, BentoError> {
-    use rspirv_reflect::{spirv, Reflection};
+    use rspirv_reflect::{Reflection, spirv};
 
     let reflection = Reflection::new_from_spirv(spirv_bytes)
         .map_err(|e| BentoError::ShaderCompilation(e.to_string()))?;
@@ -300,8 +332,10 @@ fn reflect_metadata(spirv_bytes: &[u8]) -> Result<ShaderMetadata, BentoError> {
     let mut names = HashMap::new();
     for instruction in &module.debug_names {
         if instruction.class.opcode == spirv::Op::Name {
-            if let (Some(rspirv_reflect::rspirv::dr::Operand::IdRef(id)), Some(rspirv_reflect::rspirv::dr::Operand::LiteralString(name))) =
-                (instruction.operands.get(0), instruction.operands.get(1))
+            if let (
+                Some(rspirv_reflect::rspirv::dr::Operand::IdRef(id)),
+                Some(rspirv_reflect::rspirv::dr::Operand::LiteralString(name)),
+            ) = (instruction.operands.get(0), instruction.operands.get(1))
             {
                 let id = *id;
                 names.insert(id, name.clone());
@@ -331,12 +365,76 @@ fn reflect_metadata(spirv_bytes: &[u8]) -> Result<ShaderMetadata, BentoError> {
 
     let mut inputs = Vec::new();
     let mut outputs = Vec::new();
+    let mut scalar_types = HashMap::new();
+    let mut vector_types = HashMap::new();
+    let mut pointer_types = HashMap::new();
+
+    for instruction in &module.types_global_values {
+        match instruction.class.opcode {
+            spirv::Op::TypeFloat => {
+                if let (Some(id), Some(rspirv_reflect::rspirv::dr::Operand::LiteralBit32(width))) =
+                    (instruction.result_id, instruction.operands.get(0))
+                {
+                    scalar_types.insert(id, ScalarType::Float(*width));
+                }
+            }
+            spirv::Op::TypeInt => {
+                if let (
+                    Some(id),
+                    Some(rspirv_reflect::rspirv::dr::Operand::LiteralBit32(width)),
+                    Some(rspirv_reflect::rspirv::dr::Operand::LiteralBit32(signedness)),
+                ) = (
+                    instruction.result_id,
+                    instruction.operands.get(0),
+                    instruction.operands.get(1),
+                ) {
+                    scalar_types.insert(
+                        id,
+                        ScalarType::Int {
+                            width: *width,
+                            signed: *signedness == 1,
+                        },
+                    );
+                }
+            }
+            spirv::Op::TypeVector => {
+                if let (
+                    Some(id),
+                    Some(rspirv_reflect::rspirv::dr::Operand::IdRef(component_type)),
+                    Some(rspirv_reflect::rspirv::dr::Operand::LiteralBit32(component_count)),
+                ) = (
+                    instruction.result_id,
+                    instruction.operands.get(0),
+                    instruction.operands.get(1),
+                ) {
+                    vector_types.insert(
+                        id,
+                        VectorType {
+                            component_type: *component_type,
+                            component_count: *component_count,
+                        },
+                    );
+                }
+            }
+            spirv::Op::TypePointer => {
+                if let (Some(id), Some(rspirv_reflect::rspirv::dr::Operand::IdRef(pointee_type))) =
+                    (instruction.result_id, instruction.operands.get(1))
+                {
+                    pointer_types.insert(id, *pointee_type);
+                }
+            }
+            _ => {}
+        }
+    }
+
     for instruction in &module.types_global_values {
         if instruction.class.opcode != spirv::Op::Variable {
             continue;
         }
 
-        let Some(id) = instruction.result_id else { continue };
+        let Some(id) = instruction.result_id else {
+            continue;
+        };
         let Some(rspirv_reflect::rspirv::dr::Operand::StorageClass(storage_class)) =
             instruction.operands.get(0)
         else {
@@ -348,7 +446,15 @@ fn reflect_metadata(spirv_bytes: &[u8]) -> Result<ShaderMetadata, BentoError> {
             .cloned()
             .unwrap_or_else(|| format!("var_{id}"));
         let location = locations.get(&id).copied();
-        let variable = InterfaceVariable { name, location };
+        let format = instruction
+            .result_type
+            .and_then(|ty| pointer_types.get(&ty).copied().or(Some(ty)))
+            .and_then(|ty| resolve_primitive(ty, &scalar_types, &vector_types));
+        let variable = InterfaceVariable {
+            name,
+            location,
+            format,
+        };
 
         match storage_class {
             spirv::StorageClass::Input => inputs.push(variable),
@@ -357,15 +463,32 @@ fn reflect_metadata(spirv_bytes: &[u8]) -> Result<ShaderMetadata, BentoError> {
         }
     }
 
-    inputs.sort_by(|a, b| a.location.cmp(&b.location).then_with(|| a.name.cmp(&b.name)));
-    outputs.sort_by(|a, b| a.location.cmp(&b.location).then_with(|| a.name.cmp(&b.name)));
+    inputs.sort_by(|a, b| {
+        a.location
+            .cmp(&b.location)
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    outputs.sort_by(|a, b| {
+        a.location
+            .cmp(&b.location)
+            .then_with(|| a.name.cmp(&b.name))
+    });
 
+    let mut has_vertex_entry_point = false;
     let entry_points = module
         .entry_points
         .iter()
         .filter_map(|instruction| {
             if instruction.class.opcode != spirv::Op::EntryPoint {
                 return None;
+            }
+
+            if let Some(rspirv_reflect::rspirv::dr::Operand::ExecutionModel(model)) =
+                instruction.operands.get(0)
+            {
+                if *model == spirv::ExecutionModel::Vertex {
+                    has_vertex_entry_point = true;
+                }
             }
 
             match instruction.operands.get(2) {
@@ -381,12 +504,96 @@ fn reflect_metadata(spirv_bytes: &[u8]) -> Result<ShaderMetadata, BentoError> {
         .get_compute_group_size()
         .map(|(x, y, z)| [x, y, z]);
 
+    let vertex = if has_vertex_entry_point {
+        let mut attributes: Vec<(u32, dashi::ShaderPrimitiveType)> = inputs
+            .iter()
+            .filter_map(|var| var.location.zip(var.format))
+            .collect();
+        attributes.sort_by_key(|(location, _)| *location);
+
+        let mut offset = 0usize;
+        let mut entries = Vec::new();
+        for (location, format) in attributes {
+            entries.push(VertexEntry {
+                format,
+                location: location as usize,
+                offset,
+            });
+            offset += primitive_size(format);
+        }
+
+        if entries.is_empty() {
+            None
+        } else {
+            Some(VertexLayout {
+                entries,
+                stride: offset,
+                rate: dashi::VertexRate::Vertex,
+            })
+        }
+    } else {
+        None
+    };
+
     Ok(ShaderMetadata {
         entry_points,
         inputs,
         outputs,
         workgroup_size,
+        vertex,
     })
+}
+
+#[derive(Clone, Copy)]
+enum ScalarType {
+    Float(u32),
+    Int { width: u32, signed: bool },
+}
+
+#[derive(Clone, Copy)]
+struct VectorType {
+    component_type: u32,
+    component_count: u32,
+}
+
+fn resolve_primitive(
+    type_id: u32,
+    scalars: &HashMap<u32, ScalarType>,
+    vectors: &HashMap<u32, VectorType>,
+) -> Option<dashi::ShaderPrimitiveType> {
+    let vector = vectors.get(&type_id)?;
+    let scalar = scalars.get(&vector.component_type)?;
+
+    match (scalar, vector.component_count) {
+        (ScalarType::Float(32), 2) => Some(dashi::ShaderPrimitiveType::Vec2),
+        (ScalarType::Float(32), 3) => Some(dashi::ShaderPrimitiveType::Vec3),
+        (ScalarType::Float(32), 4) => Some(dashi::ShaderPrimitiveType::Vec4),
+        (
+            ScalarType::Int {
+                width: 32,
+                signed: true,
+            },
+            4,
+        ) => Some(dashi::ShaderPrimitiveType::IVec4),
+        (
+            ScalarType::Int {
+                width: 32,
+                signed: false,
+            },
+            4,
+        ) => Some(dashi::ShaderPrimitiveType::UVec4),
+        _ => None,
+    }
+}
+
+fn primitive_size(format: dashi::ShaderPrimitiveType) -> usize {
+    match format {
+        dashi::ShaderPrimitiveType::Vec2 => 8,
+        dashi::ShaderPrimitiveType::Vec3 => 12,
+        dashi::ShaderPrimitiveType::Vec4 => 16,
+        dashi::ShaderPrimitiveType::IVec4 => 16,
+        dashi::ShaderPrimitiveType::UVec4 => 16,
+    }
 }
 
 #[cfg(test)]
@@ -417,6 +624,7 @@ mod tests {
                 inputs: vec![],
                 outputs: vec![],
                 workgroup_size: Some([1, 1, 1]),
+                vertex: None,
             },
             spirv: vec![0x0723_0203, 1, 2, 3],
         }
@@ -463,6 +671,16 @@ mod tests {
             name: Some("sample".to_string()),
             lang: ShaderLang::Glsl,
             stage: dashi::ShaderType::Compute,
+            optimization: OptimizationLevel::None,
+            debug_symbols: false,
+        }
+    }
+
+    fn sample_vertex_request() -> Request {
+        Request {
+            name: Some("vertex".to_string()),
+            lang: ShaderLang::Glsl,
+            stage: dashi::ShaderType::Vertex,
             optimization: OptimizationLevel::None,
             debug_symbols: false,
         }
@@ -530,5 +748,37 @@ mod tests {
         let err = compiler.compile(shader, &request).unwrap_err();
 
         assert!(matches!(err, BentoError::ShaderCompilation(_)));
+    }
+
+    #[test]
+    fn reflects_vertex_layout_metadata() -> Result<(), BentoError> {
+        let compiler = Compiler::new()?;
+        let request = sample_vertex_request();
+        let path = "tests/fixtures/simple_vertex.glsl";
+
+        let result = compiler.compile_from_file(path, &request)?;
+
+        let vertex = result
+            .metadata
+            .vertex
+            .expect("expected vertex layout metadata for vertex shader");
+
+        if !matches!(vertex.rate, dashi::VertexRate::Vertex) {
+            panic!("expected per-vertex rate");
+        }
+        assert_eq!(vertex.stride, 20);
+        assert_eq!(vertex.entries.len(), 2);
+
+        let first = &vertex.entries[0];
+        assert_eq!(first.location, 0);
+        assert_eq!(first.offset, 0);
+        assert_eq!(first.format, dashi::ShaderPrimitiveType::Vec3);
+
+        let second = &vertex.entries[1];
+        assert_eq!(second.location, 1);
+        assert_eq!(second.offset, 12);
+        assert_eq!(second.format, dashi::ShaderPrimitiveType::Vec2);
+
+        Ok(())
     }
 }

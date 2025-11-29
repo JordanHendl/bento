@@ -82,6 +82,16 @@ fn print_summary(result: &CompilationResult) {
         }
     }
 
+    if let Some(vertex) = &result.metadata.vertex {
+        println!("Vertex layout (stride {} bytes):", vertex.stride);
+        for entry in &vertex.entries {
+            println!(
+                "  @location({}) offset {} -> {:?}",
+                entry.location, entry.offset, entry.format
+            );
+        }
+    }
+
     if let Some([x, y, z]) = result.metadata.workgroup_size {
         println!("Workgroup size: {x} x {y} x {z}");
     }
