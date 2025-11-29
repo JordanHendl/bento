@@ -36,7 +36,7 @@ pub struct ShaderVariable {
 }
 
 /// Stage-specific metadata discovered during reflection.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ShaderMetadata {
     pub entry_points: Vec<String>,
     pub inputs: Vec<InterfaceVariable>,
@@ -76,6 +76,19 @@ pub struct CompilationResult {
 //////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////
+impl ShaderMetadata {
+    pub fn vertex_inputs(&self) -> Vec<dashi::VertexEntryInfo> {
+        self.inputs.iter().map(|a| {
+            // TODO: Get format from input, location, and calculate offsets assuming data is
+            // packed.
+            dashi::VertexEntryInfo {
+                format: todo!(),
+                location: todo!(),
+                offset: todo!(),
+            }
+        }).collect()
+    }
+}
 
 impl CompilationResult {
     pub fn save_to_disk(&self, path: &str) -> Result<(), BentoError> {
