@@ -1,5 +1,25 @@
 use bento::{BentoError, Compiler, OptimizationLevel, Request, ShaderLang};
 
+fn spirv_words_to_bytes(words: &[u32]) -> &[u8] {
+    unsafe { std::slice::from_raw_parts(words.as_ptr() as *const u8, words.len() * 4) }
+}
+
+fn binding_names_from_spirv(spirv: &[u32]) -> Vec<(u32, String)> {
+    let reflection = rspirv_reflect::Reflection::new_from_spirv(spirv_words_to_bytes(spirv))
+        .expect("failed to reflect SPIR-V");
+
+    reflection
+        .get_descriptor_sets()
+        .expect("unable to read descriptor sets")
+        .get(&0)
+        .map(|set| {
+            set.iter()
+                .map(|(binding, info)| (*binding, info.name.clone()))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
 fn sample_request(lang: ShaderLang) -> Request {
     Request {
         name: Some("sample".to_string()),
@@ -89,6 +109,106 @@ fn compiles_slang_shader() -> Result<(), BentoError> {
     assert_eq!(result.lang, ShaderLang::Slang);
     assert!(!result.spirv.is_empty());
     assert!(!result.variables.is_empty());
+
+    Ok(())
+}
+
+#[test]
+fn hlsl_binding_names_follow_registers() -> Result<(), BentoError> {
+    let compiler = Compiler::new()?;
+    let request = sample_request(ShaderLang::Hlsl);
+    let path = "tests/fixtures/hlsl_binding_map.hlsl";
+
+    let result = compiler.compile_from_file(path, &request)?;
+
+    let bindings: Vec<(u32, String)> = result
+        .variables
+        .iter()
+        .map(|var| (var.kind.binding, var.name.clone()))
+        .collect();
+    let spirv_bindings = binding_names_from_spirv(&result.spirv);
+
+    assert_eq!(bindings.len(), 4);
+    assert_eq!(bindings, spirv_bindings);
+    assert_eq!(bindings[0], (0, "colorTex".to_string()));
+    assert_eq!(bindings[1], (1, "Params".to_string()));
+    assert_eq!(bindings[2], (2, "outputData".to_string()));
+    assert_eq!(bindings[3], (3, "linearSampler".to_string()));
+
+    Ok(())
+}
+
+#[test]
+fn hlsl_binding_names_follow_declaration_order() -> Result<(), BentoError> {
+    let compiler = Compiler::new()?;
+    let request = sample_request(ShaderLang::Hlsl);
+    let path = "tests/fixtures/hlsl_binding_order.hlsl";
+
+    let result = compiler.compile_from_file(path, &request)?;
+
+    let bindings: Vec<(u32, String)> = result
+        .variables
+        .iter()
+        .map(|var| (var.kind.binding, var.name.clone()))
+        .collect();
+    let spirv_bindings = binding_names_from_spirv(&result.spirv);
+
+    assert_eq!(bindings.len(), 4);
+    assert_eq!(bindings, spirv_bindings);
+    assert_eq!(bindings[0], (0, "albedo".to_string()));
+    assert_eq!(bindings[1], (1, "FrameData".to_string()));
+    assert_eq!(bindings[2], (2, "outputData".to_string()));
+    assert_eq!(bindings[3], (3, "pointSampler".to_string()));
+
+    Ok(())
+}
+
+#[test]
+fn slang_binding_names_follow_registers() -> Result<(), BentoError> {
+    let compiler = Compiler::new()?;
+    let request = sample_request(ShaderLang::Slang);
+    let path = "tests/fixtures/slang_binding_map.slang";
+
+    let result = compiler.compile_from_file(path, &request)?;
+
+    let bindings: Vec<(u32, String)> = result
+        .variables
+        .iter()
+        .map(|var| (var.kind.binding, var.name.clone()))
+        .collect();
+    let spirv_bindings = binding_names_from_spirv(&result.spirv);
+
+    assert_eq!(bindings.len(), 4);
+    assert_eq!(bindings, spirv_bindings);
+    assert_eq!(bindings[0], (0, "colorTex".to_string()));
+    assert_eq!(bindings[1], (1, "Params".to_string()));
+    assert_eq!(bindings[2], (2, "outputData".to_string()));
+    assert_eq!(bindings[3], (3, "linearSampler".to_string()));
+
+    Ok(())
+}
+
+#[test]
+fn slang_binding_names_follow_declaration_order() -> Result<(), BentoError> {
+    let compiler = Compiler::new()?;
+    let request = sample_request(ShaderLang::Slang);
+    let path = "tests/fixtures/slang_binding_order.slang";
+
+    let result = compiler.compile_from_file(path, &request)?;
+
+    let bindings: Vec<(u32, String)> = result
+        .variables
+        .iter()
+        .map(|var| (var.kind.binding, var.name.clone()))
+        .collect();
+    let spirv_bindings = binding_names_from_spirv(&result.spirv);
+
+    assert_eq!(bindings.len(), 4);
+    assert_eq!(bindings, spirv_bindings);
+    assert_eq!(bindings[0], (0, "albedo".to_string()));
+    assert_eq!(bindings[1], (1, "FrameData".to_string()));
+    assert_eq!(bindings[2], (2, "outputData".to_string()));
+    assert_eq!(bindings[3], (3, "pointSampler".to_string()));
 
     Ok(())
 }

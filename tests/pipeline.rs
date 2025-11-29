@@ -43,7 +43,10 @@ fn builds_graphics_pipeline_with_required_fragment() {
 
     let graphics = Pipeline::from_stages(vec![vertex_stage, fragment_stage]).unwrap();
     assert_eq!(graphics.vertex().unwrap().name.as_deref(), Some("vertex"));
-    assert_eq!(graphics.fragment().unwrap().name.as_deref(), Some("fragment"));
+    assert_eq!(
+        graphics.fragment().unwrap().name.as_deref(),
+        Some("fragment")
+    );
 }
 
 #[test]
