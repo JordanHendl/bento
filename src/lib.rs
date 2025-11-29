@@ -101,6 +101,131 @@ pub struct CompilationResult {
     pub spirv: Vec<u32>,
 }
 
+/// Identifies whether a pipeline is used for graphics rendering or compute workloads.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum PipelineKind {
+    Graphics,
+    Compute,
+}
+
+/// Convenience container that groups together compatible shader stages.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum Pipeline {
+    Graphics(GraphicsPipeline),
+    Compute(ComputePipeline),
+}
+
+/// A graphics pipeline made from vertex and fragment shader results.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GraphicsPipeline {
+    pub vertex: CompilationResult,
+    pub fragment: CompilationResult,
+}
+
+/// A compute pipeline that contains a single compute shader result.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ComputePipeline {
+    pub compute: CompilationResult,
+}
+
+impl Pipeline {
+    /// Creates a pipeline from an arbitrary collection of stage compilation results.
+    ///
+    /// * Graphics pipelines require both a vertex stage and a fragment stage.
+    /// * Compute pipelines contain exactly one compute stage and cannot be mixed with graphics stages.
+    pub fn from_stages<I>(stages: I) -> Result<Self, BentoError>
+    where
+        I: IntoIterator<Item = CompilationResult>,
+    {
+        let mut vertex: Option<CompilationResult> = None;
+        let mut fragment: Option<CompilationResult> = None;
+        let mut compute: Option<CompilationResult> = None;
+
+        for stage in stages {
+            match stage.stage {
+                dashi::ShaderType::Vertex => {
+                    if vertex.replace(stage).is_some() {
+                        return Err(BentoError::InvalidInput(
+                            "Graphics pipelines can only contain one vertex stage".into(),
+                        ));
+                    }
+                }
+                dashi::ShaderType::Fragment => {
+                    if fragment.replace(stage).is_some() {
+                        return Err(BentoError::InvalidInput(
+                            "Graphics pipelines can only contain one fragment stage".into(),
+                        ));
+                    }
+                }
+                dashi::ShaderType::Compute => {
+                    if compute.replace(stage).is_some() {
+                        return Err(BentoError::InvalidInput(
+                            "Compute pipelines can only contain one compute stage".into(),
+                        ));
+                    }
+                }
+                dashi::ShaderType::All => {
+                    return Err(BentoError::InvalidInput(
+                        "ShaderType::All cannot be used to build a pipeline".into(),
+                    ));
+                }
+            }
+        }
+
+        if let Some(compute) = compute {
+            if vertex.is_some() || fragment.is_some() {
+                return Err(BentoError::InvalidInput(
+                    "Compute pipelines cannot include graphics stages".into(),
+                ));
+            }
+
+            return Ok(Self::Compute(ComputePipeline { compute }));
+        }
+
+        let vertex = vertex.ok_or_else(|| {
+            BentoError::InvalidInput("Graphics pipelines require a vertex stage".into())
+        })?;
+
+        let fragment = fragment.ok_or_else(|| {
+            BentoError::InvalidInput("Graphics pipelines require a fragment stage".into())
+        })?;
+
+        Ok(Self::Graphics(GraphicsPipeline { vertex, fragment }))
+    }
+
+    /// Returns the type of pipeline represented by this instance.
+    pub fn kind(&self) -> PipelineKind {
+        match self {
+            Self::Graphics(_) => PipelineKind::Graphics,
+            Self::Compute(_) => PipelineKind::Compute,
+        }
+    }
+
+    /// Returns the vertex shader stage, if the pipeline is graphics.
+    pub fn vertex(&self) -> Option<&CompilationResult> {
+        match self {
+            Self::Graphics(graphics) => Some(&graphics.vertex),
+            Self::Compute(_) => None,
+        }
+    }
+
+    /// Returns the fragment shader stage, if available.
+    pub fn fragment(&self) -> Option<&CompilationResult> {
+        match self {
+            Self::Graphics(graphics) => Some(&graphics.fragment),
+            Self::Compute(_) => None,
+        }
+    }
+
+    /// Returns the compute shader stage, if the pipeline is compute.
+    pub fn compute(&self) -> Option<&CompilationResult> {
+        match self {
+            Self::Graphics(_) => None,
+            Self::Compute(compute) => Some(&compute.compute),
+        }
+    }
+}
+
 //////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////
